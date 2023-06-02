@@ -39,7 +39,6 @@ namespace NextTrace
     internal class NextTraceWrapper
     {
         public Modes RunningMode;
-        public bool Quitting;
         private Process _process;
         public event EventHandler<AppQuitEventArgs> AppQuit;
         public event EventHandler<ExceptionalOutputEventArgs> ExceptionalOutput;
@@ -127,7 +126,6 @@ namespace NextTrace
 
         public void RunTraceroute(string host, string extraArgs)
         {
-            Quitting = false;
             RunningMode = Modes.Traceroute;
             Task.Run(() =>
             {
@@ -191,37 +189,36 @@ namespace NextTrace
         }
         public void RunMTR(string host, string extraArgs)
         {
-            Quitting = false;
             RunningMode = Modes.MTR;
             Task.Run(() =>
             {
-                while(Quitting != true)
+                _process = new Process
                 {
-                    _process = new Process
+                    StartInfo = new ProcessStartInfo
                     {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = nexttracePath,
-                            Arguments = ArgumentBuilder(host, extraArgs + " --queries 1", new List<string> {"queries"}),
-                            UseShellExecute = false,
-                            StandardOutputEncoding = Encoding.GetEncoding(65001),
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true,
-                            CreateNoWindow = true
-                        }
-                    };
-                    if (UserSettings.Default.IPInsightToken != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_IPINSIGHT_TOKEN", UserSettings.Default.IPInsightToken);
-                    if (UserSettings.Default.IPInfoToken != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_IPINFO_TOKEN", UserSettings.Default.IPInfoToken);
-                    if (UserSettings.Default.ChunZhenEndpoint != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_CHUNZHENURL", UserSettings.Default.ChunZhenEndpoint);
+                        FileName = nexttracePath,
+                        Arguments = ArgumentBuilder(host, extraArgs + " --queries 1", new List<string> { "queries" }),
+                        UseShellExecute = false,
+                        StandardOutputEncoding = Encoding.GetEncoding(65001),
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                if (UserSettings.Default.IPInsightToken != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_IPINSIGHT_TOKEN", UserSettings.Default.IPInsightToken);
+                if (UserSettings.Default.IPInfoToken != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_IPINFO_TOKEN", UserSettings.Default.IPInfoToken);
+                if (UserSettings.Default.ChunZhenEndpoint != "") _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_CHUNZHENURL", UserSettings.Default.ChunZhenEndpoint);
+                // 添加环境变量让NextTrace进入持续追踪模式
+                _process.StartInfo.EnvironmentVariables.Add("NEXTTRACE_UNINTERRUPTED", "1");
 
-                    Regex match1stLine = new Regex(@"^\d{1,2}\|");
-                    _process.OutputDataReceived += (sender, e) =>
+                Regex match1stLine = new Regex(@"^\d{1,2}\|");
+                _process.OutputDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null)
                     {
-                        if (e.Data != null)
-                        {
-                            // 去除输出中的控制字符
-                            Regex formatCleanup = new Regex(@"(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]");
-                            string line = formatCleanup.Replace(e.Data, "");
+                        // 去除输出中的控制字符
+                        Regex formatCleanup = new Regex(@"(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]");
+                        string line = formatCleanup.Replace(e.Data, "");
 
                             Match match1 = match1stLine.Match(line);
                             if (match1.Success)
@@ -235,7 +232,6 @@ namespace NextTrace
                                 if (line.StartsWith("IP Geo Data Provider")) return;
                                 if (line.StartsWith("[NextTrace API]")) return;
                                 Debug.Print(line);
-                                Quitting = true; // 非正常输出，结束MTR
                                 ExceptionalOutput?.Invoke(this, new ExceptionalOutputEventArgs(false, line));
                             }
                         }
@@ -245,7 +241,6 @@ namespace NextTrace
                         if (e.Data != null)
                         {
                             Debug.Print(e.Data);
-                            Quitting = true; // 非正常输出，结束MTR
                             ExceptionalOutput?.Invoke(this, new ExceptionalOutputEventArgs(true, e.Data));
                         }
                     };
@@ -253,9 +248,7 @@ namespace NextTrace
                     _process.BeginOutputReadLine();
                     _process.BeginErrorReadLine();
                     _process.WaitForExit();
-                    if (_process.ExitCode != 0) Quitting = true; // 非正常退出，结束MTR
-                }
-                AppQuit?.Invoke(this, new AppQuitEventArgs(_process.ExitCode));
+                    AppQuit?.Invoke(this, new AppQuitEventArgs(_process.ExitCode));
             });
         }
         private TracerouteResult ProcessLine(string line)
@@ -335,7 +328,6 @@ namespace NextTrace
         }
         public void Kill()
         {
-            Quitting = true;
             if (_process != null)
                 _process.Kill();
         }
